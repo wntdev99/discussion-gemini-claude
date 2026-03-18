@@ -265,13 +265,13 @@ class CDPClient:
         return self.execute_js(js)
 
     def type_contenteditable(self, selector: str, text: str, fallback_selectors: list[str] | None = None) -> dict:
-        """contenteditable div에 텍스트 입력 (Gemini/Claude ProseMirror 호환)"""
+        """contenteditable div에 텍스트 입력 (3단계 전략: CDP insertText → dispatchKeyEvent → execCommand)"""
         selectors = [selector] + (fallback_selectors or [])
-        selectors_json = json.dumps(selectors)
-        text_json = json.dumps(text)
-        js = f"""
+
+        # Step 0: JS로 요소를 찾고 focus + 기존 내용 제거
+        focus_js = f"""
         (() => {{
-            const selectors = {selectors_json};
+            const selectors = {json.dumps(selectors)};
             let el = null;
             for (const sel of selectors) {{
                 el = document.querySelector(sel);
@@ -279,24 +279,79 @@ class CDPClient:
             }}
             if (!el) return 'Element not found: ' + selectors.join(', ');
             el.focus();
-            // 기존 내용 제거
             el.innerHTML = '';
-            // execCommand('insertText')로 ProseMirror 호환 입력
-            const text = {text_json};
-            const success = document.execCommand('insertText', false, text);
-            if (success) return 'OK';
-            // fallback: innerText + InputEvent
-            el.innerText = text;
-            el.dispatchEvent(new InputEvent('input', {{
-                bubbles: true,
-                cancelable: true,
-                inputType: 'insertText',
-                data: text
-            }}));
-            return 'OK (fallback)';
+            return 'FOCUSED';
         }})()
         """
-        return self.execute_js(js)
+        resp = self.execute_js(focus_js)
+        result_val = resp.get("result", {}).get("result", {}).get("value", "")
+        if "not found" in result_val.lower():
+            return resp
+
+        # Step 1: CDP Input.insertText (가장 자연스러운 네이티브 입력)
+        insert_resp = self.send_command("Input.insertText", {"text": text})
+        if "error" not in insert_resp:
+            verify = self._verify_input_content()
+            if verify:
+                return {"result": {"result": {"value": "OK (CDP insertText)"}}}
+
+        # Step 2: CDP Input.dispatchKeyEvent (글자별 전송, 500자 이하만)
+        if len(text) <= 500:
+            # focus 재설정
+            self.execute_js(focus_js)
+            success = True
+            for char in text:
+                r = self.send_command("Input.dispatchKeyEvent", {
+                    "type": "keyDown",
+                    "text": char,
+                    "key": char,
+                    "code": "",
+                    "unmodifiedText": char,
+                })
+                if "error" in r:
+                    success = False
+                    break
+                self.send_command("Input.dispatchKeyEvent", {
+                    "type": "keyUp",
+                    "key": char,
+                    "code": "",
+                })
+            if success:
+                verify = self._verify_input_content()
+                if verify:
+                    return {"result": {"result": {"value": "OK (CDP dispatchKeyEvent)"}}}
+
+        # Step 3: 레거시 execCommand 폴백
+        self.execute_js(focus_js)
+        legacy_js = f"""
+        (() => {{
+            const el = document.activeElement;
+            if (!el) return 'No active element';
+            const text = {json.dumps(text)};
+            const success = document.execCommand('insertText', false, text);
+            if (success) return 'OK (execCommand)';
+            el.innerText = text;
+            el.dispatchEvent(new InputEvent('input', {{
+                bubbles: true, cancelable: true,
+                inputType: 'insertText', data: text
+            }}));
+            return 'OK (innerText fallback)';
+        }})()
+        """
+        return self.execute_js(legacy_js)
+
+    def _verify_input_content(self) -> bool:
+        """활성 요소에 텍스트가 실제로 입력되었는지 확인"""
+        verify_js = """
+        (() => {
+            const el = document.activeElement;
+            if (!el) return false;
+            const content = (el.innerText || el.textContent || '').trim();
+            return content.length > 0;
+        })()
+        """
+        resp = self.execute_js(verify_js)
+        return resp.get("result", {}).get("result", {}).get("value", False)
 
     def press_enter(self, selector: str) -> dict:
         """지정된 요소에 Enter 키 이벤트를 전송한다."""

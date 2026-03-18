@@ -77,28 +77,190 @@ class AITabController:
         self.cdp = CDPClient(port)
         self.selectors = selectors
         self._ws_url: str = ""
+        self._tab_url: str = ""
         self._last_response: str = ""
 
     @property
     def connected(self) -> bool:
         return self.cdp.connected
 
-    def connect_to_tab(self, ws_url: str):
+    def connect_to_tab(self, ws_url: str, tab_url: str = ""):
         """특정 탭에 WebSocket 연결"""
         self._ws_url = ws_url
+        self._tab_url = tab_url
         self.cdp.connect_tab(ws_url)
 
+    def snapshot_baseline(self) -> str:
+        """현재 페이지의 마지막 응답을 baseline으로 저장하여, 이후 새 응답 판별 기준으로 사용"""
+        current = self.read_last_response()
+        self._last_response = current
+        return current
+
+    def _refresh_ws_url(self) -> str | None:
+        """CDP HTTP API로 최신 탭 목록을 조회하여 현재 탭의 webSocketDebuggerUrl을 갱신"""
+        tabs = self.cdp.list_tabs()
+        if not tabs:
+            return None
+
+        # 1차: 저장된 tab_url과 정확히 일치하는 탭
+        if self._tab_url:
+            for tab in tabs:
+                if tab.get("url") == self._tab_url:
+                    ws = tab.get("webSocketDebuggerUrl", "")
+                    if ws:
+                        return ws
+
+        # 2차: 도메인 패턴 매칭
+        domain = ""
+        if self.name.lower() == "gemini":
+            domain = "gemini.google.com"
+        elif self.name.lower() == "claude":
+            domain = "claude.ai"
+
+        if domain:
+            for tab in tabs:
+                if domain in tab.get("url", ""):
+                    ws = tab.get("webSocketDebuggerUrl", "")
+                    if ws:
+                        return ws
+
+        return None
+
     def reconnect(self, max_retries: int = 3) -> bool:
-        """WebSocket 재연결 시도"""
-        for i in range(max_retries):
+        """WebSocket 재연결 시도 — 기존 URL 실패 시 최신 URL을 재조회"""
+        # 1단계: 기존 ws_url로 빠른 재연결 (1회)
+        if self._ws_url:
             try:
-                if self._ws_url:
-                    self.cdp.connect_tab(self._ws_url)
-                    if self.cdp.connected:
-                        return True
+                self.cdp.connect_tab(self._ws_url)
+                if self.cdp.connected:
+                    return True
+            except Exception:
+                pass
+
+        # 2단계: 최신 ws_url 조회 후 재시도
+        for _ in range(max_retries):
+            new_ws = self._refresh_ws_url()
+            if not new_ws:
+                time.sleep(2)
+                continue
+            try:
+                self.cdp.connect_tab(new_ws)
+                if self.cdp.connected:
+                    self._ws_url = new_ws
+                    return True
             except Exception:
                 time.sleep(1)
+
         return False
+
+    def auto_detect_selectors(self) -> tuple[SelectorConfig | None, str]:
+        """현재 페이지에서 입력 필드, 전송 버튼, 응답 영역, Stop 버튼 셀렉터를 자동 탐지"""
+        if not self.connected:
+            return None, "WebSocket 미연결"
+
+        detect_js = """
+        (() => {
+            const result = { input: '', send: '', response: '', stop: '' };
+
+            function buildSelector(el) {
+                if (!el) return '';
+                if (el.id) return '#' + CSS.escape(el.id);
+                let sel = el.tagName.toLowerCase();
+                const ariaLabel = el.getAttribute('aria-label');
+                if (ariaLabel) {
+                    return sel + '[aria-label="' + ariaLabel.replace(/"/g, '\\\\"') + '"]';
+                }
+                const ce = el.getAttribute('contenteditable');
+                if (ce) sel += '[contenteditable="' + ce + '"]';
+                const classes = [...el.classList].filter(c => !c.match(/^(css-|sc-|_|svelte-)/));
+                if (classes.length > 0) sel += '.' + classes.slice(0, 3).join('.');
+                return sel;
+            }
+
+            // 1) 입력 필드: 하단 contenteditable 중 가장 큰 것
+            const editables = [...document.querySelectorAll('[contenteditable="true"]')];
+            let bestInput = null;
+            let bestArea = 0;
+            for (const el of editables) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 80 || rect.height < 15) continue;
+                const area = rect.width * rect.height;
+                if (area > bestArea) {
+                    bestArea = area;
+                    bestInput = el;
+                }
+            }
+            if (bestInput) result.input = buildSelector(bestInput);
+
+            // 2) 전송 버튼: aria-label 패턴 매칭
+            const sendPatterns = /send|submit|전송|보내기/i;
+            for (const btn of document.querySelectorAll('button')) {
+                const label = btn.getAttribute('aria-label') || '';
+                const text = btn.textContent || '';
+                if (sendPatterns.test(label) || sendPatterns.test(text)) {
+                    result.send = buildSelector(btn);
+                    break;
+                }
+            }
+
+            // 3) 응답 영역: 알려진 패턴 + 폴백 휴리스틱
+            const responseCandidates = [
+                '.model-response-text',
+                '.markdown-content',
+                '[data-message-author-role="assistant"]',
+                '.response-content',
+                '.message-content',
+                '.prose',
+            ];
+            for (const sel of responseCandidates) {
+                if (document.querySelector(sel)) {
+                    result.response = sel;
+                    break;
+                }
+            }
+
+            // 4) Stop 버튼
+            const stopPatterns = /stop|cancel|중지|멈/i;
+            for (const btn of document.querySelectorAll('button')) {
+                const label = btn.getAttribute('aria-label') || '';
+                if (stopPatterns.test(label)) {
+                    result.stop = buildSelector(btn);
+                    break;
+                }
+            }
+
+            return JSON.stringify(result);
+        })()
+        """
+        resp = self.cdp.execute_js(detect_js)
+        raw = resp.get("result", {}).get("result", {}).get("value", "")
+        if not raw:
+            return None, "탐지 JS 실행 실패"
+
+        try:
+            detected = json.loads(raw)
+        except json.JSONDecodeError:
+            return None, f"탐지 결과 파싱 실패: {raw}"
+
+        found = []
+        missing = []
+        for key in ("input", "send", "response", "stop"):
+            if detected.get(key):
+                found.append(key)
+            else:
+                missing.append(key)
+
+        if not detected.get("input"):
+            return None, f"입력 필드를 탐지할 수 없음 (발견: {found}, 미발견: {missing})"
+
+        config = SelectorConfig(
+            input_selector=detected.get("input", ""),
+            send_selector=detected.get("send", ""),
+            response_selector=detected.get("response", ""),
+            stop_button_selector=detected.get("stop", ""),
+        )
+        msg = f"발견: {', '.join(found)}" + (f" / 미발견: {', '.join(missing)}" if missing else "")
+        return config, msg
 
     def check_login_status(self) -> tuple[bool, str]:
         """로그인 여부를 확인한다. (로그인됨 여부, 상태 메시지)"""
@@ -359,13 +521,17 @@ class DiscussionWorkerThread(QThread):
                     max_turns=self.max_turns,
                 )
 
-            # 메시지 전송
+            # 메시지 전송 (실패 시 1회 재연결 후 재시도)
             self.state_changed.emit(f"SENDING - 턴 {turn}/{self.max_turns} ({current_speaker.name})")
             ok, msg = current_speaker.send_message(prompt)
             if not ok:
-                self.error_occurred.emit(f"전송 실패 ({current_speaker.name}): {msg}")
-                self.state_changed.emit("ERROR")
-                return
+                self.state_changed.emit(f"RECONNECTING - {current_speaker.name} 재연결 시도 중...")
+                if current_speaker.reconnect():
+                    ok, msg = current_speaker.send_message(prompt)
+                if not ok:
+                    self.error_occurred.emit(f"전송 실패 ({current_speaker.name}): {msg}")
+                    self.state_changed.emit("ERROR")
+                    return
 
             # 응답 대기
             self.state_changed.emit(f"WAITING_RESPONSE - 턴 {turn}/{self.max_turns} ({current_speaker.name})")
@@ -638,9 +804,15 @@ class DiscussionApp(QMainWindow):
         cf.addRow("Stop:", self.sel_claude_stop)
         sel_l.addLayout(cf)
 
+        sel_btn_row = QHBoxLayout()
         btn_reset_sel = QPushButton("Reset Defaults")
         btn_reset_sel.clicked.connect(self.on_reset_selectors)
-        sel_l.addWidget(btn_reset_sel)
+        sel_btn_row.addWidget(btn_reset_sel)
+        btn_auto_detect = QPushButton("Auto-detect Selectors")
+        btn_auto_detect.clicked.connect(self.on_auto_detect_selectors)
+        sel_btn_row.addWidget(btn_auto_detect)
+        sel_btn_row.addStretch()
+        sel_l.addLayout(sel_btn_row)
 
         sel_box_layout = QVBoxLayout(self.selector_box)
         sel_box_layout.addWidget(self._selector_content)
@@ -809,8 +981,9 @@ class DiscussionApp(QMainWindow):
         selectors = self._get_selectors(ai_type)
         name = "Gemini" if ai_type == "gemini" else "Claude"
         ctrl = AITabController(name, self._cdp_port, selectors)
+        tab_url = tab.get("url", "")
         try:
-            ctrl.connect_to_tab(ws_url)
+            ctrl.connect_to_tab(ws_url, tab_url=tab_url)
         except Exception as e:
             self._syslog(f"{name} 탭 연결 실패: {e}")
             return
@@ -823,6 +996,20 @@ class DiscussionApp(QMainWindow):
             self.claude_status.setText("✅ 연결됨")
 
         self._syslog(f"{name} 탭 할당 완료: {tab.get('title', '?')}")
+
+        # 셀렉터 자동 탐지
+        detected, detect_msg = ctrl.auto_detect_selectors()
+        if detected:
+            self._syslog(f"{name} 셀렉터 자동 탐지: {detect_msg}")
+            self._apply_detected_selectors(ai_type, detected)
+            ctrl.selectors = detected
+        else:
+            self._syslog(f"{name} 셀렉터 자동 탐지 실패: {detect_msg} (기본 셀렉터 사용)")
+
+        # baseline 스냅샷 저장 (기존 대화 응답 오인 방지)
+        baseline = ctrl.snapshot_baseline()
+        if baseline:
+            self._syslog(f"{name} baseline 스냅샷 저장 ({len(baseline)}자)")
 
         # 자동 로그인 확인
         ok, msg = ctrl.check_login_status()
@@ -850,6 +1037,26 @@ class DiscussionApp(QMainWindow):
                 stop_button_selector=self.sel_claude_stop.text(),
             )
 
+    def _apply_detected_selectors(self, ai_type: str, config: SelectorConfig):
+        """탐지된 셀렉터를 GUI 필드에 반영 (값이 있는 항목만)"""
+        if ai_type == "gemini":
+            fields = [
+                (self.sel_gemini_input, config.input_selector),
+                (self.sel_gemini_send, config.send_selector),
+                (self.sel_gemini_response, config.response_selector),
+                (self.sel_gemini_stop, config.stop_button_selector),
+            ]
+        else:
+            fields = [
+                (self.sel_claude_input, config.input_selector),
+                (self.sel_claude_send, config.send_selector),
+                (self.sel_claude_response, config.response_selector),
+                (self.sel_claude_stop, config.stop_button_selector),
+            ]
+        for widget, value in fields:
+            if value:
+                widget.setText(value)
+
     # ----------------------------------------------------------------
     # 로그인 확인
     # ----------------------------------------------------------------
@@ -865,6 +1072,23 @@ class DiscussionApp(QMainWindow):
             login_icon = "✅" if ok else "❌"
             label.setText(f"✅ 연결됨 (로그인: {login_icon})")
             self._syslog(f"{name} 로그인: {msg}")
+
+    def on_auto_detect_selectors(self):
+        """할당된 탭에서 셀렉터를 자동 탐지하여 GUI에 반영"""
+        for ai_type, ctrl, name in [
+            ("gemini", self.gemini_ctrl, "Gemini"),
+            ("claude", self.claude_ctrl, "Claude"),
+        ]:
+            if ctrl is None:
+                self._syslog(f"{name}: 탭이 할당되지 않음, 탐지 건너뜀")
+                continue
+            detected, msg = ctrl.auto_detect_selectors()
+            if detected:
+                self._apply_detected_selectors(ai_type, detected)
+                ctrl.selectors = detected
+                self._syslog(f"{name} 셀렉터 자동 탐지 완료: {msg}")
+            else:
+                self._syslog(f"{name} 셀렉터 자동 탐지 실패: {msg}")
 
     # ----------------------------------------------------------------
     # 셀렉터 초기화
@@ -914,6 +1138,10 @@ class DiscussionApp(QMainWindow):
         # 셀렉터 최신화
         self.gemini_ctrl.selectors = self._get_selectors("gemini")
         self.claude_ctrl.selectors = self._get_selectors("claude")
+
+        # 토론 시작 직전 baseline 재갱신 (Assign 이후 수동 대화가 있었을 수 있음)
+        self.gemini_ctrl.snapshot_baseline()
+        self.claude_ctrl.snapshot_baseline()
 
         # 선공 결정
         if self.radio_gemini_first.isChecked():
