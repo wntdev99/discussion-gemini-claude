@@ -129,7 +129,8 @@ class ChromeProfileManager:
         """특정 프로필로 크롬을 실행한다.
 
         반환값:
-            None  — 성공 (또는 이미 CDP 포트 열림)
+            None  — 성공 (새로 실행됨)
+            "CHROME_ALREADY_CDP" — Chrome이 이미 CDP 플래그로 실행 중 (포트 대기 필요)
             "CHROME_RUNNING_NO_CDP" — Chrome이 CDP 없이 실행 중 (사용자에게 안내 필요)
             기타 문자열 — OS 에러 메시지
         """
@@ -142,7 +143,7 @@ class ChromeProfileManager:
         if self.is_chrome_running():
             if self.has_debug_port(port):
                 # CDP 플래그로 시작되었지만 포트가 아직 안 열린 경우 (시작 중)
-                return None
+                return "CHROME_ALREADY_CDP"
             return "CHROME_RUNNING_NO_CDP"
 
         # 3. Chrome 프로세스 없음 → 정상 실행
@@ -564,9 +565,14 @@ class MainWindow(QMainWindow):
             self.on_connect()
             return
 
-        err = self.profile_mgr.launch_chrome(p["dir_name"], p["port"])
+        result = self.profile_mgr.launch_chrome(p["dir_name"], p["port"])
 
-        if err == "CHROME_RUNNING_NO_CDP":
+        if result == "CHROME_ALREADY_CDP":
+            self._log(f"크롬이 이미 CDP 모드로 실행 중 (port {p['port']}). 포트 열림 대기 중...")
+            QTimer.singleShot(2500, self.on_connect)
+            return
+
+        if result == "CHROME_RUNNING_NO_CDP":
             self._log("Chrome이 CDP 모드 없이 실행 중입니다.")
             reply = QMessageBox.warning(
                 self,
@@ -585,8 +591,8 @@ class MainWindow(QMainWindow):
                     self._log("Chrome 종료에 실패했습니다. 수동으로 종료해 주세요.")
             return
 
-        if err:
-            self._log(f"크롬 실행 실패: {err}")
+        if result:
+            self._log(f"크롬 실행 실패: {result}")
             return
 
         self._log(f"크롬 실행 중... ({p['display_name']}, port {p['port']})")

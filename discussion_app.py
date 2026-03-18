@@ -4,9 +4,10 @@
 import sys
 import os
 import json
+import html
 import time
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
 
@@ -15,10 +16,9 @@ from PyQt5.QtWidgets import (
     QComboBox, QPushButton, QLabel, QLineEdit, QTextEdit,
     QGroupBox, QFileDialog, QMessageBox, QSpinBox,
     QFormLayout, QRadioButton, QButtonGroup, QScrollArea,
-    QSplitter, QFrame, QSizePolicy,
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt5.QtGui import QFont, QTextCursor, QColor
+from PyQt5.QtGui import QFont, QTextCursor
 
 from chrome_cdp_controller import ChromeProfileManager, CDPClient
 
@@ -672,8 +672,8 @@ class DiscussionApp(QMainWindow):
     def _append_chat(self, speaker: str, turn: int, text: str):
         color = "#2196F3" if speaker.lower() == "gemini" else "#FF9800"
         header = f'<div style="margin:8px 0 2px 0; font-weight:bold; color:{color};">' \
-                 f'{speaker} (Turn {turn})</div>'
-        body = f'<div style="margin:0 0 8px 12px; white-space:pre-wrap;">{text}</div>'
+                 f'{html.escape(speaker)} (Turn {turn})</div>'
+        body = f'<div style="margin:0 0 8px 12px; white-space:pre-wrap;">{html.escape(text)}</div>'
         self.chat_log.append(header + body)
         cursor = self.chat_log.textCursor()
         cursor.movePosition(QTextCursor.End)
@@ -712,9 +712,14 @@ class DiscussionApp(QMainWindow):
             self.on_connect()
             return
 
-        err = self.profile_mgr.launch_chrome(p["dir_name"], p["port"])
+        result = self.profile_mgr.launch_chrome(p["dir_name"], p["port"])
 
-        if err == "CHROME_RUNNING_NO_CDP":
+        if result == "CHROME_ALREADY_CDP":
+            self._syslog(f"크롬이 이미 CDP 모드로 실행 중 (port {p['port']}). 포트 열림 대기 중...")
+            QTimer.singleShot(2500, self.on_connect)
+            return
+
+        if result == "CHROME_RUNNING_NO_CDP":
             self._syslog("Chrome이 CDP 모드 없이 실행 중입니다.")
             reply = QMessageBox.warning(
                 self,
@@ -728,7 +733,6 @@ class DiscussionApp(QMainWindow):
                 QMessageBox.Retry,
             )
             if reply == QMessageBox.Abort:
-                # 사용자가 강제 종료 선택
                 killed = self.profile_mgr.kill_chrome()
                 if killed:
                     self._syslog("Chrome 프로세스가 종료되었습니다. 다시 Launch를 눌러주세요.")
@@ -736,8 +740,8 @@ class DiscussionApp(QMainWindow):
                     self._syslog("Chrome 종료에 실패했습니다. 수동으로 종료해 주세요.")
             return
 
-        if err:
-            self._syslog(f"크롬 실행 실패: {err}")
+        if result:
+            self._syslog(f"크롬 실행 실패: {result}")
             return
 
         self._syslog(f"크롬 실행 중... ({p['display_name']}, port {p['port']})")
