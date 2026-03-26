@@ -179,6 +179,39 @@ Wave 4:                      H-2
 
 ---
 
+## 8. 검증 하네스 (harness/)
+
+### 구조
+```
+harness/
+├── __init__.py
+├── config.py           # CDP_PORT, 타임아웃, 더미 HTML, L1~L3 파라미터
+├── reporter.py         # CheckResult, HarnessReporter (ok/fail/print_summary)
+├── preflight.py        # L0: 환경 사전검사 (7종)
+├── test_cdp_unit.py    # L1: CDP 단위 검증 (13종, 더미 HTML 대상)
+├── test_integration.py # L2: 실 서비스 통합 검증 (16종, AI 전송 없음)
+├── test_e2e.py         # L3: E2E Smoke (2종, Gemini 1턴 실 응답)
+└── run.py              # CLI 오케스트레이터
+```
+
+### 실행
+```bash
+python -m harness.run              # 전체 (L0→L1→L2→L3)
+python -m harness.run --level L1   # L0 + L1만
+python -m harness.run --skip-e2e   # L3 생략
+python -m harness.run --no-stop-on-fail  # 실패 시도 계속
+```
+
+### 레이어별 커버리지
+| 레이어 | 체크 수 | 이슈 커버리지 | 브라우저 필요 |
+|--------|---------|---------------|---------------|
+| L0 환경 사전검사 | 7 | — | 불필요 |
+| L1 CDP 단위 검증 | 13 | A-1/A-2, B-1/B-2, C-1/C-2, D-1/D-2, E-1/E-2, H-1 | Chrome (더미 페이지) |
+| L2 통합 검증 | 16 | B-1, C-1/C-2/D-1/D-2, F-1/F-2, H-2 | Gemini + Claude 탭 |
+| L3 E2E Smoke | 2 | 모든 이슈 종합 (A~H) | Gemini 탭 + 응답 생성 |
+
+---
+
 ## 7. 수정 내역 로그
 
 > 각 에이전트는 담당 이슈 해결 후 아래 형식으로 추가합니다.

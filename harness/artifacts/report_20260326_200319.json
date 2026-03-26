@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-03-26T20:03:19.295129",
+  "all_passed": false,
+  "elapsed_s": 0.02881,
+  "results": [
+    {
+      "level": "L0",
+      "name": "Python 버전",
+      "passed": true,
+      "detail": "Python 3.12.3",
+      "issue_ref": "",
+      "screenshot_path": ""
+    },
+    {
+      "level": "L0",
+      "name": "websocket-client 패키지",
+      "passed": true,
+      "detail": "import websocket 성공",
+      "issue_ref": "",
+      "screenshot_path": ""
+    },
+    {
+      "level": "L0",
+      "name": "PyQt5 패키지",
+      "passed": true,
+      "detail": "import PyQt5 성공",
+      "issue_ref": "",
+      "screenshot_path": ""
+    },
+    {
+      "level": "L0",
+      "name": "Chrome 바이너리 존재",
+      "passed": true,
+      "detail": "경로 확인: /usr/bin/google-chrome",
+      "issue_ref": "",
+      "screenshot_path": ""
+    },
+    {
+      "level": "L0",
+      "name": "CDP 포트 응답",
+      "passed": false,
+      "detail": "포트 9222 응답 없음 (connect_ex=111)",
+      "issue_ref": "",
+      "screenshot_path": ""
+    },
+    {
+      "level": "L0",
+      "name": "CDP /json 엔드포인트",
+      "passed": false,
+      "detail": "CDP 포트 미응답으로 스킵",
+      "issue_ref": "",
+      "screenshot_path": ""
+    },
+    {
+      "level": "L0",
+      "name": "탭 목록 비어있지 않음",
+      "passed": false,
+      "detail": "CDP 포트 미응답으로 스킵",
+      "issue_ref": "",
+      "screenshot_path": ""
+    }
+  ]
+}
