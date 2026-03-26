@@ -188,3 +188,4 @@ Wave 4:                      H-2
 | - | - | - | - | 대기 중 |
 | 2026-03-26 | F-1 (#11) | fix/issue-11-12-response-reading | read_last_response: last 요소만→전체 Array.from+join 결합 | 완료 |
 | 2026-03-26 | F-2 (#12) | fix/issue-11-12-response-reading | default_claude_selectors: response_selector 순서 변경으로 완료 후 매칭 보장 | 완료 |
+| 2026-03-26 | H-1 (#15) | fix/issue-15-disconnect-msgid | disconnect() 시 _msg_id=0 리셋 추가 | 완료 |

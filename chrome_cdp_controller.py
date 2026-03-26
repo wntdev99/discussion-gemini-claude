@@ -216,6 +216,7 @@ class CDPClient:
             except Exception:
                 pass
             self._ws = None
+        self._msg_id = 0  # H-1: 재연결 후 메시지 ID 오염 방지
 
     def send_command(self, method: str, params: dict | None = None) -> dict:
         """CDP 명령을 보내고 응답을 반환한다."""
