@@ -235,8 +235,11 @@ class CDPClient:
                 resp = json.loads(raw)
                 if resp.get("id") == msg_id:
                     return resp
+                # A-2: CDP 비동기 이벤트 메시지 (id 없음) — 무시하고 계속 대기
+                continue
             except websocket.WebSocketTimeoutException:
-                break
+                # A-1: break → continue — 데드라인까지 재시도
+                continue
             except Exception as e:
                 return {"error": {"message": str(e)}}
 
