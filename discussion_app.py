@@ -359,51 +359,57 @@ class AITabController:
                           stable_duration: float = 3.0) -> tuple[bool, str]:
         """응답 완료를 대기한다.
 
-        전략: poll_interval 간격으로 응답을 확인하고,
-        stable_duration 동안 텍스트 변경 없음 + Stop 버튼 사라짐 → 완료 판정
+        G-1: 스트리밍 시작 대기 루프와 완료 판정 루프를 단일 루프로 통합.
+        전략: timeout까지 단일 루프로 polling하며,
+        응답이 시작되면 stable_duration 동안 텍스트 변경 없음 + Stop 버튼 사라짐 → 완료 판정.
         """
         start = time.time()
-        last_text = ""
+        last_text = self._last_response   # baseline 기준
         stable_since: float | None = None
-
-        # 먼저 스트리밍이 시작될 때까지 대기 (최대 15초)
-        stream_wait_start = time.time()
-        while time.time() - stream_wait_start < 15:
-            current = self.read_last_response()
-            if current and current != self._last_response:
-                break
-            if self.is_streaming():
-                break
-            time.sleep(1)
+        response_started = False
 
         while time.time() - start < timeout:
+            if self._stop_check():
+                break
             current = self.read_last_response()
             streaming = self.is_streaming()
 
-            if current != last_text:
-                last_text = current
-                stable_since = None
-            else:
-                if stable_since is None:
-                    stable_since = time.time()
+            # 응답 시작 감지 (baseline과 달라지거나 스트리밍 중)
+            if not response_started:
+                if current != self._last_response or streaming:
+                    response_started = True
 
-            # 안정성 검사: 텍스트 변경 없음 + Stop 버튼 없음
-            if (stable_since is not None
-                    and time.time() - stable_since >= stable_duration
-                    and not streaming
-                    and current
-                    and current != self._last_response):
-                self._last_response = current
-                return True, current
+            if response_started:
+                if current != last_text:
+                    # 텍스트 변경 → stable 타이머 리셋
+                    last_text = current
+                    stable_since = None
+                else:
+                    # 텍스트 변경 없음 → stable 타이머 시작
+                    if stable_since is None:
+                        stable_since = time.time()
+
+                # 완료 조건: stable_duration 유지 + 스트리밍 종료 + 내용 있음 + baseline과 다름
+                if (stable_since is not None
+                        and time.time() - stable_since >= stable_duration
+                        and not streaming
+                        and current
+                        and current != self._last_response):
+                    self._last_response = current
+                    return True, current
 
             time.sleep(poll_interval)
 
-        # 타임아웃
+        # 타임아웃 시 마지막 시도
         current = self.read_last_response()
         if current and current != self._last_response:
             self._last_response = current
             return True, current
         return False, "응답 타임아웃"
+
+    def _stop_check(self) -> bool:
+        """서브클래스나 외부에서 중단 요청 여부를 확인한다. 기본값: False"""
+        return False
 
 
 # ---------------------------------------------------------------------------
