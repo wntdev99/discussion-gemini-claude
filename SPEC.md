@@ -191,3 +191,5 @@ Wave 4:                      H-2
 | 2026-03-26 | H-1 (#15) | fix/issue-15-disconnect-msgid | disconnect() 시 _msg_id=0 리셋 추가 | 완료 |
 | 2026-03-26 | E-1 (#9) | fix/issue-9-10-istrusted-events | click(): JS .click() → CDP Input.dispatchMouseEvent (isTrusted:true) | 완료 |
 | 2026-03-26 | E-2 (#10) | fix/issue-9-10-istrusted-events | press_enter(): JS dispatchEvent → CDP Input.dispatchKeyEvent (isTrusted:true) | 완료 |
+| 2026-03-26 | A-1 (#1) | fix/issue-1-2-send-command | send_command WebSocketTimeoutException: break→continue | 완료 |
+| 2026-03-26 | A-2 (#2) | fix/issue-1-2-send-command | send_command 이벤트 메시지 explicit continue 추가 | 완료 |
