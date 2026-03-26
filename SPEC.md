@@ -201,3 +201,4 @@ Wave 4:                      H-2
 | 2026-03-26 | D-2 (#8) | fix/issue-3-4-5-6-7-8-cdp-input | _verify_input_content: 길이>0→expected_text 포함 여부 비교 | 완료 |
 | 2026-03-26 | G-1 (#13) | fix/issue-13-14-wait-for-response | wait_for_response: 두 루프→단일 루프 통합, 타이밍 경쟁 조건 해결 | 완료 |
 | 2026-03-26 | G-2 (#14) | fix/issue-13-14-wait-for-response | G-1 구현+F-1 read_last_response 수정으로 stable_duration 전체 텍스트 기준 보장 | 완료 |
+| 2026-03-26 | H-2 (#16) | fix/issue-16-onstart-url-validation | on_start: 탭 URL 변경 감지 + 셀렉터 자동 재탐지 (_validate_tab_url) | 완료 |
