@@ -28,13 +28,14 @@ L3_STABLE_DURATION = 4.0      # L3: 텍스트 안정화 판정 시간
 # ---------------------------------------------------------------------------
 # L1 더미 페이지
 # contenteditable div, click isTrusted 검증용 버튼, Enter 이벤트 검증용 div 포함
+# data: URL은 < > 부분 인코딩 문제로 깨질 수 있으므로, 순수 HTML 문자열로 정의.
+# 실제 탐색은 about:blank → document.write(L1_DUMMY_HTML_CONTENT) 방식 사용.
 # ---------------------------------------------------------------------------
-L1_DUMMY_HTML = (
-    "data:text/html,"
+L1_DUMMY_HTML_CONTENT = (
     "<html><body style='font-family:sans-serif;padding:20px'>"
     "<h3>Harness L1 Dummy Page</h3>"
     "<div id='editor' contenteditable='true' "
-    "     style='width:500px;height:80px;border:1px solid #ccc;padding:6px'></div>"
+    "style='width:400px;height:80px;border:1px solid #ccc;padding:6px'></div>"
     "<br>"
     "<button id='btn' style='margin-top:8px'>Click Me</button>"
     "<p id='out' style='color:green'></p>"

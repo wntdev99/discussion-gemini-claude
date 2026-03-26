@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from urllib.request import urlopen
 
 from chrome_cdp_controller import CDPClient
-from harness.config import CDP_PORT, L1_DUMMY_HTML, L1_INPUT_REPEAT, L1_COMMAND_TIMEOUT
+from harness.config import CDP_PORT, L1_DUMMY_HTML_CONTENT, L1_INPUT_REPEAT, L1_COMMAND_TIMEOUT
 from harness.reporter import HarnessReporter
 
 LEVEL = "L1"
@@ -133,21 +133,30 @@ def run(reporter: HarnessReporter) -> None:
     # ------------------------------------------------------------------
 
     # 5. navigate 더미 페이지
+    # data: URL은 < > 문자 부분 인코딩 문제로 깨질 수 있으므로
+    # about:blank → document.write() 방식으로 HTML을 주입한다.
     navigate_ok = False
     try:
-        cdp.navigate(L1_DUMMY_HTML)
-        time.sleep(1)
-        resp = cdp.execute_js("document.getElementById('editor') !== null")
+        cdp.navigate("about:blank")
+        time.sleep(0.5)
+        inject_js = (
+            "(() => {"
+            f"  document.open(); document.write({_json.dumps(L1_DUMMY_HTML_CONTENT)}); document.close();"
+            "  return document.getElementById('editor') !== null;"
+            "})()"
+        )
+        resp = cdp.execute_js(inject_js)
         has_editor = resp.get("result", {}).get("result", {}).get("value", False)
+        time.sleep(0.3)
         if has_editor:
             navigate_ok = True
-            reporter.ok(LEVEL, "navigate 더미 페이지", "#editor 요소 존재 확인")
+            reporter.ok(LEVEL, "navigate 더미 페이지", "about:blank + document.write 성공, #editor 존재 확인")
         else:
             ss = cdp.screenshot()
             reporter.fail(
                 LEVEL,
                 "navigate 더미 페이지",
-                "#editor 요소 없음 — 페이지 로드 실패 가능성",
+                "#editor 요소 없음 — document.write 실패 가능성",
                 screenshot=ss,
             )
     except Exception as e:
