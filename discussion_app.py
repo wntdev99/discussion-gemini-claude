@@ -970,6 +970,49 @@ class DiscussionApp(QMainWindow):
                 combo.addItem(f"{title} | {url}")
 
     # ----------------------------------------------------------------
+    # 탭 URL 유효성 검사 (H-2)
+    # ----------------------------------------------------------------
+    def _validate_tab_url(self, ctrl: "AITabController", ai_type: str) -> bool:
+        """Assign 이후 탭 URL이 변경됐는지 확인하고, 변경됐으면 셀렉터를 재탐지한다.
+        H-2: on_start 시 탭 이동 감지 및 자동 재탐지.
+        반환값: True(유효 또는 재탐지 성공), False(재탐지 실패 또는 연결 오류)
+        """
+        if not ctrl.connected:
+            self._syslog(f"{ctrl.name}: WebSocket 미연결 — on_start 전 Connect 필요")
+            return False
+
+        resp = ctrl.cdp.execute_js("window.location.href")
+        current_url = resp.get("result", {}).get("result", {}).get("value", "")
+
+        if not current_url:
+            self._syslog(f"{ctrl.name}: 현재 URL 조회 실패 — 셀렉터 재탐지 시도")
+            # URL 조회 실패 시에도 재탐지 시도
+            detected, msg = ctrl.auto_detect_selectors()
+            if detected:
+                ctrl.selectors = detected
+                self._syslog(f"{ctrl.name} 셀렉터 재탐지 완료: {msg}")
+            return True  # 연결은 살아있으므로 계속 진행
+
+        if current_url == ctrl._tab_url:
+            return True  # URL 변경 없음
+
+        # URL 변경 감지
+        self._syslog(
+            f"{ctrl.name} 탭 URL 변경 감지: "
+            f"[{ctrl._tab_url[:50]}] → [{current_url[:50]}] — 셀렉터 재탐지 중..."
+        )
+        ctrl._tab_url = current_url
+        detected, msg = ctrl.auto_detect_selectors()
+        if detected:
+            ctrl.selectors = detected
+            self._apply_detected_selectors(ai_type, detected)
+            self._syslog(f"{ctrl.name} 셀렉터 재탐지 완료: {msg}")
+            return True
+        else:
+            self._syslog(f"{ctrl.name} 셀렉터 재탐지 실패: {msg}")
+            return False
+
+    # ----------------------------------------------------------------
     # 탭 할당
     # ----------------------------------------------------------------
     def on_assign_tab(self, ai_type: str):
@@ -1142,6 +1185,20 @@ class DiscussionApp(QMainWindow):
                     self, "로그인 확인",
                     f"{name}의 로그인 상태가 불확실합니다: {msg}\n계속 진행하시겠습니까?",
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                )
+                if reply == QMessageBox.No:
+                    return
+
+        # H-2: Assign 이후 탭 URL 변경 감지 및 셀렉터 재탐지
+        for ai_type, ctrl in [("gemini", self.gemini_ctrl), ("claude", self.claude_ctrl)]:
+            if not self._validate_tab_url(ctrl, ai_type):
+                reply = QMessageBox.question(
+                    self, "셀렉터 재탐지 실패",
+                    f"{ctrl.name} 탭의 URL이 변경되었지만 셀렉터 자동 탐지에 실패했습니다.\n"
+                    f"현재 URL: {ctrl._tab_url}\n\n"
+                    "현재 셀렉터로 계속 진행하시겠습니까?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
                 )
                 if reply == QMessageBox.No:
                     return
