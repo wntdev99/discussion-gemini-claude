@@ -186,3 +186,5 @@ Wave 4:                      H-2
 | 날짜 | 이슈 | 브랜치 | 수정 요약 | 상태 |
 |------|------|--------|-----------|------|
 | - | - | - | - | 대기 중 |
+| 2026-03-26 | F-1 (#11) | fix/issue-11-12-response-reading | read_last_response: last 요소만→전체 Array.from+join 결합 | 완료 |
+| 2026-03-26 | F-2 (#12) | fix/issue-11-12-response-reading | default_claude_selectors: response_selector 순서 변경으로 완료 후 매칭 보장 | 완료 |

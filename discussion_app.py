@@ -48,7 +48,9 @@ def default_claude_selectors() -> SelectorConfig:
     return SelectorConfig(
         input_selector='div[contenteditable="true"].ProseMirror',
         send_selector='button[aria-label="Send Message"]',
-        response_selector='[data-is-streaming] .markdown-content, .font-claude-message .markdown-content',
+        # F-2: 스트리밍/완료 양쪽 상태에서 매칭되는 복합 선택자
+        # .font-claude-message를 우선으로, 스트리밍 중 폴백으로 [data-is-streaming] 포함
+        response_selector='.font-claude-message .markdown-content, [data-is-streaming] .markdown-content',
         stop_button_selector='button[aria-label="Stop Response"]',
     )
 
@@ -336,14 +338,17 @@ class AITabController:
         return resp.get("result", {}).get("result", {}).get("value", False)
 
     def read_last_response(self) -> str:
-        """마지막 응답 텍스트를 추출한다."""
+        """응답 텍스트를 모든 매칭 요소에서 결합하여 반환한다."""
         sel = self.selectors.response_selector
         js = f"""
         (() => {{
             const els = document.querySelectorAll({json.dumps(sel)});
             if (els.length === 0) return '';
-            const last = els[els.length - 1];
-            return last.innerText || last.textContent || '';
+            // F-1: 전체 요소 텍스트 결합 (스트리밍 분할 블록 대응)
+            return Array.from(els)
+                .map(e => (e.innerText || e.textContent || '').trim())
+                .filter(Boolean)
+                .join('\\n');
         }})()
         """
         resp = self.cdp.execute_js(js)
