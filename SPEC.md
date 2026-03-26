@@ -193,3 +193,9 @@ Wave 4:                      H-2
 | 2026-03-26 | E-2 (#10) | fix/issue-9-10-istrusted-events | press_enter(): JS dispatchEvent → CDP Input.dispatchKeyEvent (isTrusted:true) | 완료 |
 | 2026-03-26 | A-1 (#1) | fix/issue-1-2-send-command | send_command WebSocketTimeoutException: break→continue | 완료 |
 | 2026-03-26 | A-2 (#2) | fix/issue-1-2-send-command | send_command 이벤트 메시지 explicit continue 추가 | 완료 |
+| 2026-03-26 | B-1 (#3) | fix/issue-3-4-5-6-7-8-cdp-input | connect_tab: Target.activateTarget + _active_target_id 저장 | 완료 |
+| 2026-03-26 | B-2 (#4) | fix/issue-3-4-5-6-7-8-cdp-input | type_contenteditable: Input.insertText 전 activateTarget 재확인 | 완료 |
+| 2026-03-26 | C-1 (#5) | fix/issue-3-4-5-6-7-8-cdp-input | type_contenteditable: innerHTML='' → Selection API+CDP Delete 클리어 | 완료 |
+| 2026-03-26 | C-2 (#6) | fix/issue-3-4-5-6-7-8-cdp-input | type_contenteditable: 클리어 후 검증 + execCommand 폴백 추가 | 완료 |
+| 2026-03-26 | D-1 (#7) | fix/issue-3-4-5-6-7-8-cdp-input | _verify_input_content: activeElement→selector 파라미터 기반 검증 | 완료 |
+| 2026-03-26 | D-2 (#8) | fix/issue-3-4-5-6-7-8-cdp-input | _verify_input_content: 길이>0→expected_text 포함 여부 비교 | 완료 |

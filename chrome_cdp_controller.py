@@ -190,6 +190,7 @@ class CDPClient:
         self.port = port
         self._ws: websocket.WebSocket | None = None
         self._msg_id = 0
+        self._active_target_id: str = ""
 
     @property
     def connected(self) -> bool:
@@ -205,9 +206,13 @@ class CDPClient:
             return []
 
     def connect_tab(self, ws_url: str):
-        """특정 탭에 WebSocket으로 연결한다."""
+        """특정 탭에 WebSocket으로 연결하고 활성화한다."""
         self.disconnect()
         self._ws = websocket.create_connection(ws_url, timeout=10)
+        # B-1: Input.* 명령이 올바른 탭에 적용되도록 탭 활성화
+        # ws_url에서 targetId 파싱: "ws://localhost:PORT/devtools/page/{targetId}"
+        self._active_target_id = ws_url.rstrip("/").split("/")[-1]
+        self.send_command("Target.activateTarget", {"targetId": self._active_target_id})
 
     def disconnect(self):
         if self._ws:
@@ -305,7 +310,7 @@ class CDPClient:
         """contenteditable div에 텍스트 입력 (3단계 전략: CDP insertText → dispatchKeyEvent → execCommand)"""
         selectors = [selector] + (fallback_selectors or [])
 
-        # Step 0: JS로 요소를 찾고 focus + 기존 내용 제거
+        # Step 0: JS로 요소를 찾고 focus + Selection API로 기존 내용 클리어 (React DOM 유지)
         focus_js = f"""
         (() => {{
             const selectors = {json.dumps(selectors)};
@@ -316,7 +321,12 @@ class CDPClient:
             }}
             if (!el) return 'Element not found: ' + selectors.join(', ');
             el.focus();
-            el.innerHTML = '';
+            // C-1: innerHTML='' 대신 Selection API로 전체 선택 후 React 친화적 클리어
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
             return 'FOCUSED';
         }})()
         """
@@ -325,16 +335,48 @@ class CDPClient:
         if "not found" in result_val.lower():
             return resp
 
+        # Selection 후 Delete 키로 내용 삭제 (isTrusted: true)
+        self.send_command("Input.dispatchKeyEvent", {
+            "type": "keyDown", "key": "Delete", "code": "Delete",
+            "windowsVirtualKeyCode": 46, "nativeVirtualKeyCode": 46,
+        })
+        self.send_command("Input.dispatchKeyEvent", {
+            "type": "keyUp", "key": "Delete", "code": "Delete",
+            "windowsVirtualKeyCode": 46, "nativeVirtualKeyCode": 46,
+        })
+
+        # C-2: 클리어 검증
+        clear_verify_js = f"""
+        (() => {{
+            const selectors = {json.dumps(selectors)};
+            let el = null;
+            for (const sel of selectors) {{
+                el = document.querySelector(sel);
+                if (el) break;
+            }}
+            if (!el) return false;
+            return (el.innerText || el.textContent || '').trim() === '';
+        }})()
+        """
+        clear_ok = self.execute_js(clear_verify_js).get("result", {}).get("result", {}).get("value", False)
+        if not clear_ok:
+            # 클리어 실패 시 execCommand 폴백
+            self.execute_js("document.execCommand('selectAll', false, null)")
+            self.execute_js("document.execCommand('delete', false, null)")
+
+        # B-2: Input.insertText 전 탭 활성화 재확인
+        if hasattr(self, '_active_target_id') and self._active_target_id:
+            self.send_command("Target.activateTarget", {"targetId": self._active_target_id})
+
         # Step 1: CDP Input.insertText (가장 자연스러운 네이티브 입력)
         insert_resp = self.send_command("Input.insertText", {"text": text})
         if "error" not in insert_resp:
-            verify = self._verify_input_content()
+            verify = self._verify_input_content(selector, text)
             if verify:
                 return {"result": {"result": {"value": "OK (CDP insertText)"}}}
 
         # Step 2: CDP Input.dispatchKeyEvent (글자별 전송, 500자 이하만)
         if len(text) <= 500:
-            # focus 재설정
             self.execute_js(focus_js)
             success = True
             for char in text:
@@ -354,7 +396,7 @@ class CDPClient:
                     "code": "",
                 })
             if success:
-                verify = self._verify_input_content()
+                verify = self._verify_input_content(selector, text)
                 if verify:
                     return {"result": {"result": {"value": "OK (CDP dispatchKeyEvent)"}}}
 
@@ -377,16 +419,30 @@ class CDPClient:
         """
         return self.execute_js(legacy_js)
 
-    def _verify_input_content(self) -> bool:
-        """활성 요소에 텍스트가 실제로 입력되었는지 확인"""
-        verify_js = """
-        (() => {
-            const el = document.activeElement;
-            if (!el) return false;
-            const content = (el.innerText || el.textContent || '').trim();
-            return content.length > 0;
-        })()
+    def _verify_input_content(self, selector: str, expected_text: str = "") -> bool:
+        """입력된 요소에 expected_text 앞부분이 실제로 포함되었는지 확인한다.
+        D-1: activeElement 대신 selector 기반으로 검증
+        D-2: 텍스트 길이 > 0 대신 expected_text 포함 여부 비교
         """
+        if expected_text:
+            snippet = json.dumps(expected_text[:30])
+            verify_js = f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return false;
+                const content = (el.innerText || el.textContent || '').trim();
+                return content.includes({snippet});
+            }})()
+            """
+        else:
+            verify_js = f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return false;
+                const content = (el.innerText || el.textContent || '').trim();
+                return content.length > 0;
+            }})()
+            """
         resp = self.execute_js(verify_js)
         return resp.get("result", {}).get("result", {}).get("value", False)
 
