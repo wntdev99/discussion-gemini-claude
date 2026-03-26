@@ -247,9 +247,42 @@ class CDPClient:
     def navigate(self, url: str) -> dict:
         return self.send_command("Page.navigate", {"url": url})
 
+    def _get_element_center(self, selector: str) -> tuple[float, float] | None:
+        """CSS 셀렉터로 요소의 중앙 좌표를 반환한다. 요소가 없으면 None."""
+        resp = self.query_selector(selector)
+        node_id = resp.get("result", {}).get("nodeId", 0)
+        if node_id == 0:
+            return None
+        box_resp = self.send_command("DOM.getBoxModel", {"nodeId": node_id})
+        model = box_resp.get("result", {}).get("model", {})
+        # content quad: [x0,y0, x1,y1, x2,y2, x3,y3] (시계 방향, 좌상단부터)
+        content = model.get("content", [])
+        if len(content) < 8:
+            return None
+        x = (content[0] + content[2] + content[4] + content[6]) / 4
+        y = (content[1] + content[3] + content[5] + content[7]) / 4
+        return x, y
+
     def click(self, selector: str) -> dict:
-        js = f"document.querySelector({json.dumps(selector)})?.click()"
-        return self.execute_js(js)
+        """CSS 셀렉터로 요소를 CDP 마우스 이벤트로 클릭한다. (isTrusted: true)"""
+        center = self._get_element_center(selector)
+        if center is None:
+            return {"error": {"message": f"Element not found or no box model: {selector}"}}
+        x, y = center
+        self.send_command("Input.dispatchMouseEvent", {
+            "type": "mousePressed",
+            "x": x, "y": y,
+            "button": "left",
+            "clickCount": 1,
+            "modifiers": 0,
+        })
+        return self.send_command("Input.dispatchMouseEvent", {
+            "type": "mouseReleased",
+            "x": x, "y": y,
+            "button": "left",
+            "clickCount": 1,
+            "modifiers": 0,
+        })
 
     def type_text(self, selector: str, text: str) -> dict:
         js = f"""
@@ -355,20 +388,28 @@ class CDPClient:
         return resp.get("result", {}).get("result", {}).get("value", False)
 
     def press_enter(self, selector: str) -> dict:
-        """지정된 요소에 Enter 키 이벤트를 전송한다."""
-        js = f"""
-        (() => {{
-            const el = document.querySelector({json.dumps(selector)});
-            if (!el) return 'Element not found';
-            el.focus();
-            const opts = {{key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}};
-            el.dispatchEvent(new KeyboardEvent('keydown', opts));
-            el.dispatchEvent(new KeyboardEvent('keypress', opts));
-            el.dispatchEvent(new KeyboardEvent('keyup', opts));
-            return 'OK';
-        }})()
-        """
-        return self.execute_js(js)
+        """지정된 요소에 CDP Enter 키 이벤트를 전송한다. (isTrusted: true)"""
+        # focus는 JS로 (isTrusted 불필요)
+        self.execute_js(
+            f"document.querySelector({json.dumps(selector)})?.focus()"
+        )
+        # CDP keyDown + keyUp (isTrusted: true)
+        self.send_command("Input.dispatchKeyEvent", {
+            "type": "keyDown",
+            "key": "Enter",
+            "code": "Enter",
+            "windowsVirtualKeyCode": 13,
+            "nativeVirtualKeyCode": 13,
+            "unmodifiedText": "\r",
+            "text": "\r",
+        })
+        return self.send_command("Input.dispatchKeyEvent", {
+            "type": "keyUp",
+            "key": "Enter",
+            "code": "Enter",
+            "windowsVirtualKeyCode": 13,
+            "nativeVirtualKeyCode": 13,
+        })
 
     def execute_js(self, expression: str) -> dict:
         return self.send_command("Runtime.evaluate", {
