@@ -19,6 +19,7 @@ from discussion_app import (
 )
 from harness.config import (
     CDP_PORT,
+    CDP_HOST,
     L2_GEMINI_DOMAIN,
     L2_CLAUDE_DOMAIN,
     L2_TEST_INPUT_TEXT,
@@ -103,7 +104,7 @@ def _run_ai_checks(
 
     # ── 체크 2(10): WebSocket 연결 ───────────────────────────────────────────
     try:
-        ctrl = AITabController(ai_name.lower(), CDP_PORT, make_selectors())
+        ctrl = AITabController(ai_name.lower(), CDP_PORT, make_selectors(), host=CDP_HOST)
         ctrl.connect_to_tab(ws_url, tab_url)
         if ctrl.connected:
             reporter.ok(LEVEL, f"{ai_name} 탭 WebSocket 연결",
@@ -248,7 +249,7 @@ def _run_ai_checks(
 
 def run(reporter: HarnessReporter) -> None:
     """L2 통합 검증 실행 — Gemini 탭 8종 + Claude 탭 8종 = 총 16개 체크."""
-    cdp_base = CDPClient(CDP_PORT)
+    cdp_base = CDPClient(CDP_PORT, host=CDP_HOST)
 
     # ── Gemini 탭 검증 (체크 1~8) ────────────────────────────────────────────
     _run_ai_checks(

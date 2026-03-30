@@ -6,6 +6,7 @@ import os
 # CDP 연결 설정
 # ---------------------------------------------------------------------------
 CDP_PORT = int(os.environ.get("CDP_PORT", "9222"))
+CDP_HOST = os.environ.get("CDP_HOST", "localhost")
 CHROME_BINARY = os.environ.get("CHROME_BINARY", "/usr/bin/google-chrome")
 
 # ---------------------------------------------------------------------------

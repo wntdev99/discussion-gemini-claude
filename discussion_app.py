@@ -48,9 +48,9 @@ def default_claude_selectors() -> SelectorConfig:
     return SelectorConfig(
         input_selector='div[contenteditable="true"].ProseMirror',
         send_selector='button[aria-label="Send Message"]',
-        # F-2: 스트리밍/완료 양쪽 상태에서 매칭되는 복합 선택자
-        # .font-claude-message를 우선으로, 스트리밍 중 폴백으로 [data-is-streaming] 포함
-        response_selector='.font-claude-message .markdown-content, [data-is-streaming] .markdown-content',
+        # F-2: 스트리밍/완료 양쪽 상태에서 매칭되는 선택자
+        # div[data-is-streaming]은 스트리밍 중/완료 후 모두 응답 컨테이너로 존재함
+        response_selector='div[data-is-streaming]',
         stop_button_selector='button[aria-label="Stop Response"]',
     )
 
@@ -74,9 +74,9 @@ class DiscussionState(Enum):
 class AITabController:
     """CDPClient 하나 + SelectorConfig를 감싸는 고수준 컨트롤러"""
 
-    def __init__(self, name: str, port: int, selectors: SelectorConfig):
+    def __init__(self, name: str, port: int, selectors: SelectorConfig, host: str = "localhost"):
         self.name = name
-        self.cdp = CDPClient(port)
+        self.cdp = CDPClient(port, host=host)
         self.selectors = selectors
         self._ws_url: str = ""
         self._tab_url: str = ""

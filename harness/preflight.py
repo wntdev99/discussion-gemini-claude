@@ -6,10 +6,13 @@ import json
 from urllib.request import urlopen
 from urllib.error import URLError
 
-from harness.config import CDP_PORT, CHROME_BINARY, PREFLIGHT_HTTP_TIMEOUT
+from harness.config import CDP_PORT, CDP_HOST, CHROME_BINARY, PREFLIGHT_HTTP_TIMEOUT
 from harness.reporter import HarnessReporter
 
 LEVEL = "L0"
+
+# IPv6 주소는 URL에서 [::1] 형식으로 감싸야 함
+_CDP_HOST_URL = f"[{CDP_HOST}]" if ":" in CDP_HOST else CDP_HOST
 
 
 def run(reporter: HarnessReporter) -> None:
@@ -66,16 +69,13 @@ def run(reporter: HarnessReporter) -> None:
     # ------------------------------------------------------------------
     cdp_port_ok = False
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(PREFLIGHT_HTTP_TIMEOUT)
-            result = s.connect_ex(("localhost", CDP_PORT))
-        if result == 0:
-            cdp_port_ok = True
-            reporter.ok(LEVEL, "CDP 포트 응답", f"포트 {CDP_PORT} 응답 확인")
-        else:
-            reporter.fail(LEVEL, "CDP 포트 응답", f"포트 {CDP_PORT} 응답 없음 (connect_ex={result})")
+        # create_connection은 getaddrinfo를 사용하여 IPv4/IPv6 모두 처리
+        conn = socket.create_connection((CDP_HOST, CDP_PORT), timeout=PREFLIGHT_HTTP_TIMEOUT)
+        conn.close()
+        cdp_port_ok = True
+        reporter.ok(LEVEL, "CDP 포트 응답", f"포트 {CDP_PORT} 응답 확인")
     except Exception as e:
-        reporter.fail(LEVEL, "CDP 포트 응답", f"예외: {e}")
+        reporter.fail(LEVEL, "CDP 포트 응답", f"포트 {CDP_PORT} 응답 없음: {e}")
 
     # CDP 포트 미응답 시 이후 HTTP/탭 체크는 스킵
     if not cdp_port_ok:
@@ -90,7 +90,7 @@ def run(reporter: HarnessReporter) -> None:
     json_ok = False
     try:
         resp = urlopen(
-            f"http://localhost:{CDP_PORT}/json",
+            f"http://{_CDP_HOST_URL}:{CDP_PORT}/json",
             timeout=PREFLIGHT_HTTP_TIMEOUT,
         )
         raw = resp.read()

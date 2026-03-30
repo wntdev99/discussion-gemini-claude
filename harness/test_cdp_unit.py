@@ -6,10 +6,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 
 from chrome_cdp_controller import CDPClient
-from harness.config import CDP_PORT, L1_DUMMY_HTML_CONTENT, L1_INPUT_REPEAT, L1_COMMAND_TIMEOUT
+from harness.config import (
+    CDP_PORT,
+    CDP_HOST,
+    L1_DUMMY_HTML_CONTENT,
+    L1_INPUT_REPEAT,
+    L1_COMMAND_TIMEOUT,
+    L2_GEMINI_DOMAIN,
+    L2_CLAUDE_DOMAIN,
+)
 from harness.reporter import HarnessReporter
 
 LEVEL = "L1"
@@ -36,20 +44,52 @@ _INJECT_LISTENER_JS = """
 """
 
 
+# IPv6 주소는 URL에서 [::1] 형식으로 감싸야 함
+_CDP_HOST_URL = f"[{CDP_HOST}]" if ":" in CDP_HOST else CDP_HOST
+
+
 def run(reporter: HarnessReporter) -> None:
     """L1 CDP 단위 검증 체크를 순서대로 수행한다."""
 
     # ------------------------------------------------------------------
     # 탭 목록 조회 및 CDPClient 연결
+    # L1은 더미 페이지로 탭을 덮어쓰므로 Gemini/Claude 탭을 피해야 한다.
+    # 우선순위: AI 탭이 아닌 탭 → 없으면 새 탭 생성 후 사용
     # ------------------------------------------------------------------
+    _AI_DOMAINS = (L2_GEMINI_DOMAIN, L2_CLAUDE_DOMAIN)
+
+    def _is_ai_tab(tab: dict) -> bool:
+        url = tab.get("url", "")
+        return any(d in url for d in _AI_DOMAINS)
+
+    cdp_new_tab_opened = False
     try:
-        tabs = _json.loads(urlopen(f"http://localhost:{CDP_PORT}/json", timeout=3).read())
+        tabs = _json.loads(urlopen(f"http://{_CDP_HOST_URL}:{CDP_PORT}/json", timeout=3).read())
         page_tabs = [t for t in tabs if t.get("type") == "page"]
         if not page_tabs:
             reporter.fail(LEVEL, "탭 연결", "type=page 탭 없음")
             return
-        cdp = CDPClient(CDP_PORT)
-        cdp.connect_tab(page_tabs[0]["webSocketDebuggerUrl"])
+
+        # AI 탭이 아닌 탭 우선 사용
+        non_ai_tabs = [t for t in page_tabs if not _is_ai_tab(t)]
+        if non_ai_tabs:
+            target_tab = non_ai_tabs[0]
+        else:
+            # 새 빈 탭 열기 — /json/new 는 POST 필요
+            new_tab_resp = urlopen(
+                Request(
+                    f"http://{_CDP_HOST_URL}:{CDP_PORT}/json/new",
+                    data=b"",
+                    method="PUT",
+                ),
+                timeout=3,
+            )
+            target_tab = _json.loads(new_tab_resp.read())
+            cdp_new_tab_opened = True
+            time.sleep(0.3)
+
+        cdp = CDPClient(CDP_PORT, host=CDP_HOST)
+        cdp.connect_tab(target_tab["webSocketDebuggerUrl"])
     except Exception as e:
         reporter.fail(LEVEL, "탭 연결", f"예외: {e}")
         return
@@ -119,12 +159,12 @@ def run(reporter: HarnessReporter) -> None:
                 issue_ref="H-1",
             )
         # 재연결
-        cdp.connect_tab(page_tabs[0]["webSocketDebuggerUrl"])
+        cdp.connect_tab(target_tab["webSocketDebuggerUrl"])
     except Exception as e:
         reporter.fail(LEVEL, "disconnect 후 _msg_id 리셋", f"예외: {e}", issue_ref="H-1")
         # 재연결 시도
         try:
-            cdp.connect_tab(page_tabs[0]["webSocketDebuggerUrl"])
+            cdp.connect_tab(target_tab["webSocketDebuggerUrl"])
         except Exception:
             pass
 
@@ -384,6 +424,16 @@ def run(reporter: HarnessReporter) -> None:
     # [정리]
     # ------------------------------------------------------------------
     try:
+        target_id = cdp._active_target_id
         cdp.disconnect()
+        # L1이 새로 열었던 탭은 테스트 후 닫는다
+        if cdp_new_tab_opened and target_id:
+            try:
+                urlopen(
+                    f"http://{_CDP_HOST_URL}:{CDP_PORT}/json/close/{target_id}",
+                    timeout=3,
+                )
+            except Exception:
+                pass
     except Exception:
         pass

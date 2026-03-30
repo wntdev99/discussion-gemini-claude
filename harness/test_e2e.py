@@ -10,10 +10,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from chrome_cdp_controller import CDPClient
-from discussion_app import AITabController, default_gemini_selectors
+from discussion_app import AITabController, default_gemini_selectors, default_claude_selectors
 from harness.config import (
     CDP_PORT,
+    CDP_HOST,
     L2_GEMINI_DOMAIN,
+    L2_CLAUDE_DOMAIN,
     L3_SMOKE_TEXT,
     L3_RESPONSE_TIMEOUT,
     L3_STABLE_DURATION,
@@ -24,8 +26,8 @@ LEVEL = "L3"
 
 
 def run(reporter: HarnessReporter) -> None:
-    """L3 E2E Smoke 실행 — Gemini 탭에서 메시지 전송 및 응답 완료 대기 2개 체크."""
-    cdp_base = CDPClient(CDP_PORT)
+    """L3 E2E Smoke 실행 — Gemini/Claude 탭에서 메시지 전송 및 응답 완료 대기 4개 체크."""
+    cdp_base = CDPClient(CDP_PORT, host=CDP_HOST)
 
     # Gemini 탭 탐지
     tabs = cdp_base.list_tabs()
@@ -43,7 +45,7 @@ def run(reporter: HarnessReporter) -> None:
 
     # ── 체크 1: Gemini E2E 메시지 전송 ──────────────────────────────────────
     try:
-        gemini_ctrl = AITabController("gemini", CDP_PORT, default_gemini_selectors())
+        gemini_ctrl = AITabController("gemini", CDP_PORT, default_gemini_selectors(), host=CDP_HOST)
         gemini_ctrl.connect_to_tab(ws_url, tab_url)
 
         # 베이스라인 스냅샷 저장 (새 응답 판별 기준)
@@ -104,6 +106,91 @@ def run(reporter: HarnessReporter) -> None:
         except Exception:
             pass
         reporter.fail(LEVEL, "Gemini E2E 응답 완료 대기",
+                      detail=f"예외: {type(e).__name__}: {e}",
+                      issue_ref="G-1/G-2",
+                      screenshot=screenshot)
+
+    # Gemini 연결 해제
+    try:
+        if gemini_ctrl and gemini_ctrl.connected:
+            gemini_ctrl.cdp.disconnect()
+    except Exception:
+        pass
+
+    # ── Claude 탭 탐지 ──────────────────────────────────────────────────────
+    tabs = cdp_base.list_tabs()
+    claude_tab = next(
+        (t for t in tabs if L2_CLAUDE_DOMAIN in t.get("url", "")), None
+    )
+    if not claude_tab:
+        reporter.fail(LEVEL, "Claude E2E 메시지 전송", "Claude 탭 없음 — 스킵")
+        reporter.fail(LEVEL, "Claude E2E 응답 완료 대기", "Claude 탭 없음 — 스킵")
+        return
+
+    ws_url_c = claude_tab.get("webSocketDebuggerUrl", "")
+    tab_url_c = claude_tab.get("url", "")
+    claude_ctrl: AITabController | None = None
+
+    # ── 체크 3: Claude E2E 메시지 전송 ──────────────────────────────────────
+    try:
+        claude_ctrl = AITabController("claude", CDP_PORT, default_claude_selectors(), host=CDP_HOST)
+        claude_ctrl.connect_to_tab(ws_url_c, tab_url_c)
+        claude_ctrl.snapshot_baseline()
+
+        ok, msg = claude_ctrl.send_message(L3_SMOKE_TEXT)
+        if ok:
+            reporter.ok(LEVEL, "Claude E2E 메시지 전송",
+                        detail=msg,
+                        issue_ref="A-1/A-2/B-1/B-2/C-1/C-2/D-1/D-2/E-1/E-2")
+        else:
+            reporter.fail(LEVEL, "Claude E2E 메시지 전송",
+                          detail=msg,
+                          issue_ref="A-1/A-2/B-1/B-2/C-1/C-2/D-1/D-2/E-1/E-2",
+                          screenshot=claude_ctrl.cdp.screenshot())
+            reporter.fail(LEVEL, "Claude E2E 응답 완료 대기",
+                          detail="메시지 전송 실패로 스킵",
+                          issue_ref="G-1/G-2")
+            return
+    except Exception as e:
+        screenshot = None
+        try:
+            if claude_ctrl and claude_ctrl.connected:
+                screenshot = claude_ctrl.cdp.screenshot()
+        except Exception:
+            pass
+        reporter.fail(LEVEL, "Claude E2E 메시지 전송",
+                      detail=f"예외: {type(e).__name__}: {e}",
+                      issue_ref="A-1/A-2/B-1/B-2/C-1/C-2/D-1/D-2/E-1/E-2",
+                      screenshot=screenshot)
+        reporter.fail(LEVEL, "Claude E2E 응답 완료 대기",
+                      detail="메시지 전송 예외로 스킵",
+                      issue_ref="G-1/G-2")
+        return
+
+    # ── 체크 4: Claude E2E 응답 완료 대기 ───────────────────────────────────
+    try:
+        success, response_text = claude_ctrl.wait_for_response(
+            timeout=L3_RESPONSE_TIMEOUT,
+            stable_duration=L3_STABLE_DURATION,
+        )
+        if success and response_text:
+            reporter.ok(LEVEL, "Claude E2E 응답 완료 대기",
+                        detail=f"응답 {len(response_text)}자 수신",
+                        issue_ref="G-1/G-2")
+        else:
+            detail = f"success={success}, 응답 길이={len(response_text)}자"
+            reporter.fail(LEVEL, "Claude E2E 응답 완료 대기",
+                          detail=detail,
+                          issue_ref="G-1/G-2",
+                          screenshot=claude_ctrl.cdp.screenshot())
+    except Exception as e:
+        screenshot = None
+        try:
+            if claude_ctrl and claude_ctrl.connected:
+                screenshot = claude_ctrl.cdp.screenshot()
+        except Exception:
+            pass
+        reporter.fail(LEVEL, "Claude E2E 응답 완료 대기",
                       detail=f"예외: {type(e).__name__}: {e}",
                       issue_ref="G-1/G-2",
                       screenshot=screenshot)

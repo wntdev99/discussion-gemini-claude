@@ -164,10 +164,13 @@ class ChromeProfileManager:
 
     @staticmethod
     def is_port_open(port: int) -> bool:
-        """포트가 열려 있는지 확인한다."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.5)
-            return s.connect_ex(("localhost", port)) == 0
+        """포트가 열려 있는지 확인한다 (IPv4/IPv6 모두 시도)."""
+        try:
+            conn = socket.create_connection(("localhost", port), timeout=0.5)
+            conn.close()
+            return True
+        except OSError:
+            return False
 
     @staticmethod
     def _assign_port(profile_dir: str) -> int:
@@ -186,8 +189,9 @@ class ChromeProfileManager:
 class CDPClient:
     """Chrome DevTools Protocol 클라이언트"""
 
-    def __init__(self, port: int):
+    def __init__(self, port: int, host: str = "localhost"):
         self.port = port
+        self._host = host
         self._ws: websocket.WebSocket | None = None
         self._msg_id = 0
         self._active_target_id: str = ""
@@ -199,7 +203,9 @@ class CDPClient:
     def list_tabs(self) -> list[dict]:
         """열린 탭 목록을 반환한다."""
         try:
-            resp = urlopen(f"http://localhost:{self.port}/json", timeout=3)
+            host = getattr(self, "_host", "localhost")
+            host_str = f"[{host}]" if ":" in host else host
+            resp = urlopen(f"http://{host_str}:{self.port}/json", timeout=3)
             tabs = json.loads(resp.read().decode())
             return [t for t in tabs if t.get("type") == "page"]
         except (URLError, OSError, json.JSONDecodeError):
@@ -208,7 +214,11 @@ class CDPClient:
     def connect_tab(self, ws_url: str):
         """특정 탭에 WebSocket으로 연결하고 활성화한다."""
         self.disconnect()
-        self._ws = websocket.create_connection(ws_url, timeout=10)
+        # Chrome은 Origin 헤더 검사를 수행한다. IPv6(::1)로 연결할 때도
+        # Origin은 'http://localhost'로 고정하여 403 거부를 방지한다.
+        self._ws = websocket.create_connection(
+            ws_url, timeout=10, origin="http://localhost"
+        )
         # B-1: Input.* 명령이 올바른 탭에 적용되도록 탭 활성화
         # ws_url에서 targetId 파싱: "ws://localhost:PORT/devtools/page/{targetId}"
         self._active_target_id = ws_url.rstrip("/").split("/")[-1]
